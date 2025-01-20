@@ -1,0 +1,1433 @@
+<?php
+    function get_all_filters () {
+        $filters = array(
+            'pa_price' => array(
+                'label' => 'Цена',
+                'type' => 'range',
+                'custom_class' => 'cost',
+                'meta_key' => 'lot_cost',
+                'comparison' => array(
+                    'meta_query' => array(
+                        'key' => 'lot_cost',
+                        'type' => 'NUMERIC',
+                    ),
+                ),
+            ),
+            'pa_area' => array(
+                'label' => 'Площадь',
+                'type' => 'range',
+                'custom_class' => 'square',
+                'meta_key' => 'area_value',
+                'comparison' => array(
+                    'meta_query' => array(
+                        'key' => 'area_value',
+                        'type' => 'NUMERIC',
+                    ),
+                ),
+            ),
+            'pa_street' => array(
+                'label' => 'Улица',
+                'type' => 'input-text',
+                'custom_class' => 'street',
+                'meta_key' => 'lot_street',
+                'comparison' => array(
+                    'meta_query' => array(
+                        'key' => 'lot_street',
+                        'compare' => '=',
+                    ),
+                ),
+            ),
+            'pa_metro' => array(
+                'label' => 'Метро',
+                'type' => 'input-text',
+                'custom_class' => 'metro',
+                'meta_key' => 'lot_metro',
+                'comparison' => array(
+                    'meta_query' => array(
+                        'key' => 'lot_metro',
+                        'compare' => 'LIKE',
+                    ),
+                ),
+            ),
+            'pa_new_building' => array(
+                'label' => 'В новостройке',
+                'type' => 'checkbox',
+                'custom_class' => 'new-build',
+                'meta_key' => 'lot-new-build',
+                'comparison' => array(
+                    'meta_query' => array(
+                        'key' => 'lot-new-build',
+                        'compare' => '=',
+                    ),
+                ),
+            ),
+            'pa_secondary' => array(
+                'label' => 'Вторичка',
+                'type' => 'checkbox',
+                'custom_class' => 'second',
+                'comparison' => array(
+                    'meta_query' => array(
+                        'key' => 'lot-new-build',
+                        'compare' => '!=',
+                    ),
+                ),
+            ),
+            'pa_floor' => array(
+                'label' => 'Этаж',
+                'type' => 'range',
+                'custom_class' => 'etage',
+                'meta_key' => 'floor',
+                'comparison' => array(
+                    'meta_query' => array(
+                        'key' => 'floor',
+                        'type' => 'NUMERIC',
+                    ),
+                ),
+            ),
+            'pa_floors_total' => array(
+                'label' => 'Этажность',
+                'type' => 'range',
+                'custom_class' => 'maxet',
+                'meta_key' => 'floor_total',
+                'comparison' => array(
+                    'meta_query' => array(
+                        'key' => 'floor_total',
+                        'type' => 'NUMERIC',
+                    ),
+                ),
+            ),
+            'pa_rooms' => array(
+                'label' => 'Комнат',
+                'type' => 'select',
+                'custom_class' => 'rooms',
+                'meta_key' => 'lot_rooms',
+                'comparison' => array(
+                    'meta_query' => array(
+                        'key' => 'lot_rooms',
+                        'compare' => '=',
+                    ),
+                ),
+            ),
+        );
+
+        $all_attributes = get_terms( array(
+            'taxonomy' => array( 'lots_attribute' ),
+            'hide_empty' => false,
+        ) );
+
+        if ( !is_wp_error( $all_attributes ) && !empty( $all_attributes ) ) {
+            foreach ( $all_attributes as $attribute ) {
+                if ( $type = get_field('attribute_type', 'category_' . $attribute->term_id) ) {
+                    $custom_class = get_field('attribute_custom_class', 'category_' . $attribute->term_id);
+                    $attribute_filter = array(
+                        'label' => $attribute->name,
+                        'type' => $type,
+                        'custom_class' => $custom_class,
+                    );
+
+                    $filters['pa_' . $attribute->slug] = $attribute_filter;
+                }
+            }
+        }
+
+        return $filters;
+    }
+
+    function get_all_filters_values () {
+        $filters = get_all_filters();
+        global $wp_query, $wpdb;
+        if ( !is_admin() ) {
+            $query = $wp_query->query_vars;
+            foreach ($query as $key => $val) {
+                if (!$val) unset($query[$key]);
+            }
+            $query['posts_per_page'] = -1;
+            $query['no_found_rows'] = 1;
+            $query['fields'] = 'ids';
+            $query['meta_query'] = array();
+            $query['tax_query'] = array();
+            if ( get_class(get_queried_object()) == 'WP_Term' ) {
+                $query['tax_query'][] = array(
+                    'taxonomy' => get_queried_object()->taxonomy,
+                    'field' => 'term_id',
+                    'terms' => get_queried_object_id(),
+                );
+            }
+
+            $temp_query = new WP_Query($query);
+
+            $post_ids = implode(",",$temp_query->get_posts());
+            if ( !empty( $post_ids ) ) {
+                foreach ( $filters as $filter_name => $filter_data ) {
+                    if ( !taxonomy_exists( $filter_name ) ) {
+                        if ( !empty( $filter_data['meta_key'] ) ) {
+                            if ( $filter_data['type'] == 'range' ) {
+                                $filters[$filter_name]['values'] = $wpdb->get_row($wpdb->prepare("
+                                    SELECT MIN(cast(pm.meta_value as int)) AS start, MAX(cast(pm.meta_value as int)) AS end
+                                    FROM $wpdb->postmeta pm
+                                    WHERE pm.post_id IN($post_ids) AND pm.meta_key = '%s'
+                                ", $filter_data['meta_key']), ARRAY_A);
+                            } else if ( $filter_data['type'] == 'input-text' || $filter_data['type'] == 'select' ) {
+                                $meta_values = $wpdb->get_results($wpdb->prepare("
+                                    SELECT DISTINCT pm.meta_value
+                                    FROM $wpdb->postmeta pm
+                                    WHERE pm.post_id IN($post_ids) AND pm.meta_key = '%s'
+                                ", $filter_data['meta_key']), ARRAY_A);
+
+                                if ( !is_null($meta_values) ) {
+                                    foreach ( $meta_values as $value ) {
+                                        if ( !empty( $value['meta_value'] ) ) {
+                                            $filters[$filter_name]['values'][] = $value['meta_value'];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        $filters[$filter_name]['values'] = $wpdb->get_results($wpdb->prepare("
+                            SELECT DISTINCT t.term_id, t.name
+                            FROM $wpdb->term_relationships tr
+                            LEFT JOIN $wpdb->terms t ON tr.term_taxonomy_id = t.term_id
+                            LEFT JOIN $wpdb->term_taxonomy tt ON tt.term_id = t.term_id
+                            WHERE tr.object_id IN($post_ids) AND tt.taxonomy = %s
+                            ORDER BY t.name
+                        ", $filter_name));
+                    }
+                }
+            }
+        }
+        return $filters;
+    }
+
+    function get_tags_catalog () {
+        global $wp_query, $wpdb;
+        $tags = array();
+        if ( !is_admin() ) {
+            $query = $wp_query->query_vars;
+            foreach ($query as $key => $val) {
+                if (!$val) unset($query[$key]);
+            }
+            $query['posts_per_page'] = -1;
+            $query['no_found_rows'] = 1;
+            $query['fields'] = 'ids';
+            $temp_query = new WP_Query($query);
+
+            $post_ids = implode(",",$temp_query->get_posts());
+
+            $tags = $wpdb->get_results($wpdb->prepare("
+                SELECT DISTINCT t.term_id, t.name
+                FROM $wpdb->term_relationships tr
+                LEFT JOIN $wpdb->terms t ON tr.term_taxonomy_id = t.term_id
+                LEFT JOIN $wpdb->term_taxonomy tt ON tt.term_id = t.term_id
+                WHERE tr.object_id IN($post_ids) AND tt.taxonomy = %s
+                ORDER BY t.name
+            ", 'mark_lot'));
+        }
+
+        return $tags;
+    }
+
+
+
+    function acf_load_attribute_type_field_choices( $field ) {
+        $filters = get_all_filters();
+        $field['choices'] = array();
+        if ( !empty( $filters ) ) {
+            foreach ( $filters as $key => $filter ) {
+                $field['choices'][$key] = $filter['label'];
+            }
+        }
+
+        return $field;
+    }
+
+    add_filter('acf/load_field/key=field_5ed486b133551', 'acf_load_attribute_type_field_choices');
+    add_filter('acf/load_field/key=field_5ed4c64edd95b', 'acf_load_attribute_type_field_choices');
+
+    add_filter('acf/load_field/key=field_5ed4cc5ba1a5b', 'acf_load_attribute_type_field_choices');
+    add_filter('acf/load_field/key=field_5ed4cc99a1a5c', 'acf_load_attribute_type_field_choices');
+
+
+    function get_format_price ( $post_id ) {
+        $price_value = number_format(get_field('lot_cost', $post_id), 0, '.', ' ');
+        $payment_period = get_field('payment_period', $post_id);
+        $currency = get_field('currency', $post_id);
+
+        $currency_type = array(
+            'RUB' => ' руб.',
+            'EUR' => ' €',
+            'USD' => ' $',
+        );
+        $period_type = array(
+            'one' => '',
+            'month' => '/мес',
+        );
+
+        $price = '';
+        if ( !empty( $price_value ) && $currency ) {
+            $price = $price_value . $currency_type[$currency];
+            if ( !empty( $payment_period ) ) {
+                $price .= $period_type[$payment_period];
+            }
+        }
+
+        return $price;
+    }
+
+
+    function get_format_price_area ( $post_id ) {
+        $price_area = '';
+
+        $cost_square_meter = get_field('lot_cost_per_square_meter', $post_id);
+        $area_unit = get_field('area_unit', $post_id);
+        $payment_period = get_field('payment_period', $post_id);
+        $currency = get_field('currency', $post_id);
+
+        $currency_type = array(
+            'RUB' => ' руб',
+            'EUR' => ' евр',
+            'USD' => ' долл',
+        );
+        $period_type = array(
+            'one' => '',
+            'month' => ' в мес.',
+        );
+
+        if ( !empty( $cost_square_meter ) && !empty( $currency ) ) {
+            $price_area = $cost_square_meter . $currency_type[$currency];
+            if ( !empty( $area_unit ) ) {
+                $price_area .= ' за ' . $area_unit;
+            }
+            if ( !empty($payment_period) ) {
+                $price_area .= $period_type[$payment_period];
+            }
+        }
+
+        return $price_area;
+    }
+
+
+    function catalog_pagination() {
+        global $wp_query;
+        $big = 999999999;
+        echo paginate_links(array(
+            'base' => str_replace($big, '%#%', esc_url(get_pagenum_link($big))),
+			'prev_text'    => '<svg width="6" height="12" viewBox="0 0 8 14" fill="none" xmlns="https://www.w3.org/2000/svg"><path d="M7 1L0.999999 7L7 13" stroke="#0D0D0D" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+			'next_text'    => '<svg width="6" height="12" viewBox="0 0 8 14" fill="none" xmlns="https://www.w3.org/2000/svg"><path d="M1 1L7 7L1 13" stroke="#0D0D0D" stroke-width="1.5" stroke-linejoin="round"/></svg>',
+            'mid_size' => 3,
+            'end_size' => 1,
+            'prev_next' => true,
+            'total' => $wp_query->max_num_pages,
+            'current' => max(1, get_query_var('paged')),
+        ));
+    }
+
+
+    add_action( 'pre_get_posts', function ($query) {
+
+        if ( !is_admin() && $query->is_main_query() && is_post_type_archive('employee') ) {
+            $query->set('order', 'ASC');
+            $query->set('orderby', 'menu_order');
+
+            // var_dump($query->get('order'));
+            // var_dump($query->get('orderby'));
+        }
+
+        if ( (!is_admin() && $query->is_main_query() ) && ( is_post_type_archive('lot') || $query->is_tax('catalog') || $query->is_tax('mark_lot')) ) {
+            $query->set( 'posts_per_page', ( get_field('catalog_count_posts_per_page', 'options') ) ? get_field('catalog_count_posts_per_page', 'options') : 4 );
+            if ( !empty($_REQUEST['view_type']) && $_REQUEST['view_type'] == 'map') {
+                $query->set('fields', 'ids');
+                $query->set('posts_per_page', -1);
+            }
+        }
+    });
+
+    function get_count_lots_day () {
+        $args = array();
+
+        $args['post_type'] = 'lot';
+        $args['posts_per_page'] = -1;
+        $args['year'] = date("Y");
+        $args['monthnum'] = date("m");
+        $args['day'] = date("j");
+        $args['fields'] = 'ids';
+        $args['no_found_rows'] = true;
+
+        if ( get_class(get_queried_object()) == 'WP_Term' ) {
+            $args['tax_query'] = array(
+                'relation' => 'OR',
+                array(
+                    'taxonomy' => get_queried_object()->taxonomy,
+                    'field' => 'term_id',
+                    'terms' => get_queried_object_id(),
+                ),
+            );
+        }
+
+        $posts = get_posts($args);
+
+        return count($posts);
+    }
+
+
+    function get_count_lots_week () {
+        $args = array();
+
+        $args['post_type'] = 'lot';
+        $args['posts_per_page'] = -1;
+        // $args['year'] = date("Y");
+        // $args['w'] = date("W");
+        $args['fields'] = 'ids';
+        $args['date_query'] = array(
+            array(
+                'after' => '7 days ago',
+            ),
+        );
+        $args['no_found_rows'] = true;
+
+
+        $posts = get_posts($args);
+
+        return count($posts);
+    }
+
+
+    function get_range_value_meta () {
+        $args = array();
+
+        $args['post_type'] = 'lot';
+        $args['posts_per_page'] = -1;
+        $args['year'] = date("Y");
+        $args['monthnum'] = date("m");
+        $args['day'] = date("j");
+        $args['fields'] = 'ids';
+        $args['no_found_rows'] = true;
+
+        if ( get_class(get_queried_object()) == 'WP_Term' ) {
+            $args['tax_query'] = array(
+                'relation' => 'OR',
+                array(
+                    'taxonomy' => get_queried_object()->taxonomy,
+                    'field' => 'term_id',
+                    'terms' => get_queried_object_id(),
+                ),
+            );
+        }
+
+        $posts = get_posts($args);
+        $prices = array();
+        $price = array();
+
+        if ( !empty( $posts ) ) {
+            foreach ( $posts as $post_id ) {
+                $prices[] = get_field('lot_cost', $post_id);
+            }
+
+            $prices = array_unique($prices);
+            $price['start'] = min($prices);
+            $price['end'] = max($prices);
+        }
+
+        return $price;
+    }
+
+    add_action( 'pre_get_posts', function ( $query ) {
+
+        if ( !is_admin() && $query->is_main_query() ) {
+            if ( $query->is_tax('catalog') || $query->is_post_type_archive('lot') ) {
+                $meta_query = (array) $query->get('meta_query');
+                $tax_query = (array) $query->get('tax_query');
+
+                if ( empty( $meta_query ) ) $meta_query = array();
+                if ( empty( $tax_query ) ) $tax_query = array();
+                $tax_query['relation'] = "AND";
+                $meta_query['relation'] = "AND";
+
+
+                $filters = get_all_filters();
+                if ( array_key_exists('catalog_filter', $query->query_vars) ) $vars = explode( '-or-', $query->query_vars['catalog_filter'] );
+
+                $request = array();
+                if ( !empty( $filters ) && !empty( $vars ) ) {
+                    foreach ( $vars as $var ) {
+                        foreach ( $filters as $filter_name => $filter_data ) {
+                            if ( $filter_data['type'] == 'range' ) {
+                                if ( preg_match("(^(" . $filter_name . ")-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $re = '/(([0-9]*)?[^-variety-]([0-9]*))/';
+                                    preg_match_all($re, $var, $matches);
+
+                                    $request[$filter_name] = $matches[0];
+                                }
+                            } else if ( $filter_data['type'] == 'multi-select' ) {
+                                if ( preg_match("(^" . $filter_name . "-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $request[$filter_name] = explode('-and-', $var);
+                                }
+                            } else if ( $filter_data['type'] == 'input-text' ) {
+                                if ( preg_match("(^" . $filter_name . "-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $request[$filter_name] = urldecode($var);
+                                }
+                            } else if ( $filter_data['type'] == 'select' ) {
+                                if ( preg_match("(^" . $filter_name . "-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $request[$filter_name] = urldecode($var);
+                                }
+                            } else if ( $filter_data['type'] == 'checkbox' ) {
+                                if ( preg_match("(^" . $filter_name . "-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $request[$filter_name] = ( $var === 'on' );
+                                }
+                            }
+                        }
+                    }
+
+                    if ( !empty( $request ) ) set_query_var( 'request', $request );
+                }
+
+                if ( !empty( $_REQUEST['catalog_tags'] ) ) {
+                    $catalog_tags = $_REQUEST['catalog_tags'];
+                    $tax_query[] = array(
+                        'taxonomy' => 'mark_lot',
+                        'field' => 'id',
+                        'operator' => 'IN',
+                        'terms' => $catalog_tags,
+                    );
+                }
+
+                if ( !empty( $request ) ) {
+                    foreach ( $request as $filter_name => $values ) {
+                        if ( $filters[$filter_name]['type'] === 'range' ) {
+                                /* $range = array(
+                                    'start' => $values[0],
+                                    'end' => ( !empty($values[1]) ) ? $values[1] : $values[0],
+                                ); */
+                                foreach($values as $key=>$value){
+                                    $values[$key] = str_replace('%20', '', $value);
+                                }
+
+                            // $values[1] = ( !empty($values[1]) ) ? $values[1] : $values[0];
+
+                            if ( !empty( $filters[$filter_name]['comparison']['meta_query'] ) ) {
+                            
+                                if ( $values[0] != $values[1] ) {
+                                    $filter_meta_query = $filters[$filter_name]['comparison']['meta_query'];
+                                    $filter_meta_query['compare'] = 'BETWEEN';
+                                    $filter_meta_query['value'] = $values;
+                                    $meta_query[] = $filter_meta_query;
+                                } else {
+                                    $filter_meta_query = $filters[$filter_name]['comparison']['meta_query'];
+                                    $filter_meta_query['compare'] = '=';
+                                    $filter_meta_query['value'] = reset($values);
+                                    $meta_query[] = $filter_meta_query;
+                                }
+                            }
+                        } else if ( $filters[$filter_name]['type'] == 'input-text' ) {
+                            $filter_meta_query = $filters[$filter_name]['comparison']['meta_query'];
+                            $filter_meta_query['value'] = trim($values);
+                            $meta_query[] = $filter_meta_query;
+                        } else if ( $filters[$filter_name]['type'] == 'select' ) {
+                            if ( taxonomy_exists( $filter_name ) ) {
+                                $tax_query[] = array(
+                                    'taxonomy' => $filter_name,
+                                    'field' => 'slug',
+                                    'terms' => array($values),
+                                );
+                            } else {
+                                $filter_meta_query = $filters[$filter_name]['comparison']['meta_query'];
+                                $filter_meta_query['value'] = $values;
+                                $meta_query[] = $filter_meta_query;
+                            }
+                        } else if ( $filters[$filter_name]['type'] == 'multi-select' ) {
+                            if ( taxonomy_exists( $filter_name ) ) {
+                                $tax_query[] = array(
+                                    'taxonomy' => $filter_name,
+                                    'field' => 'slug',
+                                    'operator' => 'IN',
+                                    'terms' => $values,
+                                );
+                            }
+                        } else if ( $filters[$filter_name]['type'] == 'checkbox' ) {
+                            $filter_meta_query = $filters[$filter_name]['comparison']['meta_query'];
+                            if ( $filter_name == 'pa_new_building' ) {
+                                $filter_meta_query['value'] = true;
+                            } else if ($filter_name == 'pa_secondary') {
+                                $filter_meta_query['value'] = false;
+                            } else {
+                                $filter_meta_query['value'] = $values;
+                            }
+
+                            $meta_query[] = $filter_meta_query;
+                        }
+                    }
+                }
+
+
+
+                $orders = get_all_sorting();
+                $orderby = $_COOKIE['orderby'];
+                $request_sort = explode('&', $_SERVER['QUERY_STRING']);
+
+                if ( !empty( $request_sort ) ) {
+                    foreach ( $request_sort as $request_sort_item ) {
+                        $values = explode('=', $request_sort_item);
+                        if ( $values[0] == 'orderby' ) $orderby = $values[1];
+                    }
+                }
+
+                $query->set( 'order', $orders[$orderby]['order'] );
+
+                if ( $orderby == 'desc_date' || $orderby == 'asc_date' ) {
+                    $query->set( 'orderby', 'date' );
+                    $query->set( 'meta_key', '' );
+                } else {
+                    $query->set( 'orderby', 'meta_value_num' );
+                    $query->set( 'meta_key', $orders[$orderby]['orderby'] );
+                }
+
+                /* if ( $_SERVER['REMOTE_ADDR'] == '46.8.36.105' ) {
+                    var_dump( $meta_query );
+                } *//*  else { */
+                    $query->set('meta_query', $meta_query);
+                    $query->set('tax_query', $tax_query);
+                // }
+
+            }
+        }
+    });
+
+    add_action('wp_head', 'post_views');
+    function post_views() {
+
+    $meta_key       = 'lot_views';
+    $who_count      = 1;
+    $exclude_bots   = 1;
+
+    global $user_ID, $post;
+        if(is_singular()) {
+            $id = (int)$post->ID;
+            static $post_views = false;
+            if($post_views) return true;
+            $post_views = (int)get_post_meta($id,$meta_key, true);
+            $should_count = false;
+            switch( (int)$who_count ) {
+                case 0: $should_count = true;
+                    break;
+                case 1:
+                    if( (int)$user_ID == 0 )
+                        $should_count = true;
+                    break;
+                case 2:
+                    if( (int)$user_ID > 0 )
+                        $should_count = true;
+                    break;
+            }
+            if( (int)$exclude_bots==1 && $should_count ){
+                $useragent = $_SERVER['HTTP_USER_AGENT'];
+                $notbot = "Mozilla|Opera";
+                $bot = "Bot/|robot|Slurp/|yahoo";
+                if ( !preg_match("/$notbot/i", $useragent) || preg_match("!$bot!i", $useragent) )
+                    $should_count = false;
+            }
+
+            if($should_count)
+                if( !update_post_meta($id, $meta_key, ($post_views+1)) ) add_post_meta($id, $meta_key, 1, true);
+        }
+        return true;
+    }
+
+    function setup_views() {
+        $post_type = array( 'lot' );
+
+        $wp_query = new WP_Query(array(
+            'post_type' => $post_type,
+            'posts_per_page' => -1,
+            'fields' => 'ids',
+            'no_found_rows' => true,
+        ));
+
+        $post_ids = $wp_query->get_posts();
+
+        foreach ( $post_ids as $post_id ) {
+            update_post_meta($post_id, 'lot_views', 0);
+        }
+    }
+
+    function get_all_sorting () {
+        $orderby = array(
+            'desc_price' => array(
+                'title' => 'По цене (убывание)',
+                'order' => 'DESC',
+                'orderby' => 'lot_cost',
+            ),
+            'asc_price' => array(
+                'title' => 'По цене (возрастание)',
+                'order' => 'ASC',
+                'orderby' => 'lot_cost'
+            ),
+
+            'desc_date' => array(
+                'title' => 'По дате (убывание)',
+                'order' => 'DESC',
+                'orderby' => ''
+            ),
+            'asc_date' => array(
+                'title' => 'По дате (возрастание)',
+                'order' => 'ASC',
+                'orderby' => ''
+            ),
+
+            'desc_area' => array(
+                'title' => 'По площади (убывание)',
+                'order' => 'DESC',
+                'orderby' => 'area_value',
+            ),
+            'asc_area' => array(
+                'title' => 'По площади (возрастание)',
+                'order' => 'ASC',
+                'orderby' => 'area_value'
+            ),
+            /*'asc_address' => array(
+                'title' => 'По адресу (от А до Я)',
+                'order' => 'ASC',
+                'orderby' => 'lot_address'
+            ),*/
+        );
+
+        return $orderby;
+    }
+
+
+    add_action('init', function(){
+        //$orderby = 'asc_address';
+        $orderby = 'desc_date';
+        if (!empty( $_REQUEST['orderby'] ) ) {
+            $orderby = $_REQUEST['orderby'];
+        }
+        setcookie('orderby', $orderby, time()+MONTH_IN_SECONDS, '/');
+        if (array_key_exists('orderby', $_REQUEST)) unset($_REQUEST["orderby"]);
+    });
+
+
+    /**
+     * Получить все избранные товары
+    */
+    function get_favorites(){
+        if (!session_id()) {
+            session_set_cookie_params(MONTH_IN_SECONDS);
+            session_start();
+        }
+        $favorites = array();
+        if ( !empty( $_SESSION['favorites'] ) ) $favorites = json_decode(base64_decode($_SESSION['favorites']));
+
+        return $favorites;
+    }
+
+    /**
+     * Сохранить все избранные товары
+    */
+    function set_favorites($favorites){
+        get_favorites();
+        if (!is_array($favorites)) $favorites = array();
+        $_SESSION['favorites'] = base64_encode(json_encode($favorites));
+    }
+
+    /**
+     * Добавить товар в избранное
+    */
+    function add_to_favorites($post_id){
+        $favorites = get_favorites();
+
+        $favorites[] = $post_id;
+        $favorites = array_unique($favorites);
+
+        set_favorites($favorites);
+
+        return $favorites;
+    }
+
+    /**
+     * Получить кол-во избранных отваров
+    */
+    function get_favorites_count() {
+        $favorites = get_favorites();
+
+        return count($favorites);
+    }
+    /**
+     * Удалить товар из збранного
+    */
+    function remove_from_favorites($post_id){
+        $favorites = get_favorites();
+
+        $key = array_search($post_id, $favorites);
+        if ($key !== false) unset($favorites[$key]);
+
+        set_favorites(array_values($favorites));
+    }
+    /**
+     * Проверить есть ли товар в избранном
+    */
+    function in_favorites($post_id) {
+        $favorites = get_favorites();
+
+        $key = array_search($post_id, $favorites);
+
+        return ($key !== false);
+    }
+
+    /**
+     * Получить ссылку на страницу избранное
+    */
+    function get_link_page_favorites(){
+        if ( $favorites_page = get_field('catalog_favorites', 'options') ) {
+            return $favorites_page;
+        }
+    }
+
+
+    /**
+     * Получить все товары в сравнении
+    */
+    function get_comparisons(){
+        if (!session_id()) {
+            session_set_cookie_params(MONTH_IN_SECONDS);
+            session_start();
+        }
+        $comparisons = array();
+        if ( !empty( $_SESSION['comparisons'] ) ) $comparisons = json_decode(base64_decode($_SESSION['comparisons']));
+
+        return $comparisons;
+    }
+
+    /**
+     * Сохранить все товары в сравнении
+    */
+    function set_comparisons($comparisons){
+        get_comparisons();
+        if (!is_array($comparisons)) $comparisons = array();
+        $_SESSION['comparisons'] = base64_encode(json_encode($comparisons));
+    }
+
+    /**
+     * Добавить товар в сравнение
+    */
+    function add_to_comparisons($post_id){
+        $comparisons = get_comparisons();
+
+        $comparisons[] = $post_id;
+        $comparisons = array_unique($comparisons);
+
+        set_comparisons($comparisons);
+
+        return $comparisons;
+    }
+
+    /**
+     * Получить кол-во товаров из сравнения
+    */
+    function get_comparisons_count() {
+        $comparisons = get_comparisons();
+
+        return count($comparisons);
+    }
+    /**
+     * Удалить товар из сравнения
+    */
+    function remove_from_comparisons($post_id){
+        $comparisons = get_comparisons();
+
+        $key = array_search($post_id, $comparisons);
+        if ($key !== false) unset($comparisons[$key]);
+
+        set_comparisons(array_values($comparisons));
+    }
+    /**
+     * Проверить есть ли товар в сравнении
+    */
+    function in_comparisons($post_id) {
+        $comparisons = get_comparisons();
+
+        $key = array_search($post_id, $comparisons);
+
+        return ($key !== false);
+    }
+
+    /**
+     * Получить ссылку на страницу сравнения
+    */
+    function get_link_page_comparisons(){
+        if ( $comparisons_page = get_field('catalog_comparisons', 'options') ) {
+            return $comparisons_page;
+        }
+    }
+
+
+    function get_field_comparisons () {
+        $fields = array(
+            'lot_district' => array(
+                'label' => 'Район',
+                'type' => 'text',
+            ),
+            'lot_type_object' => array(
+                'label' => 'Тип объекта',
+                'type' => 'text',
+            ),
+            'area_value' => array(
+                'label' => 'Площадь',
+                'type' => 'text',
+            ),
+            'lot_cost' => array(
+                'label' => 'Цена',
+                'type' => 'text'
+            ),
+            'lot_cost_per_square_meter' => array(
+                'label' => 'Цена за кв.м',
+                'type' => 'text',
+            ),
+            'floor' => array(
+                'label' => 'Этаж',
+                'type' => 'text',
+            ),
+            'floor_total' => array(
+                'label' => 'Этажность',
+                'type' => 'text',
+            ),
+            'lot-new-build' => array(
+                'label' => 'Новостройка',
+                'type' => 'boolean',
+            ),
+            'lot_elite-estate' => array(
+                'label' => 'Элитная недвижимость',
+                'type' => 'boolean',
+            ),
+            'lot_secure-parking' => array(
+                'label' => 'Охраняемая парковка',
+                'type' => 'boolean',
+            ),
+            'lot_closed-territory' => array(
+                'label' => 'Закрытая территория',
+                'type' => 'boolean',
+            ),
+            'lot_is-internet' => array(
+                'label' => 'Интернет',
+                'type' => 'boolean',
+            ),
+            'lot_is-furniture' => array(
+                'label' => 'Мебель',
+                'type' => 'boolean',
+            ),
+            'lot_is-plumbing' => array(
+                'label' => 'Водопровод',
+                'type' => 'boolean',
+            ),
+            'lot_is-sewerage' => array(
+                'label' => 'Канализация',
+                'type' => 'boolean',
+            ),
+            'lot_is-gas' => array(
+                'label' => 'Газ',
+                'type' => 'boolean',
+            ),
+            'lot_is-heating' => array(
+                'label' => 'Отопление',
+                'type' => 'boolean',
+            ),
+            'lot_is-phone' => array(
+                'label' => 'Телефон',
+                'type' => 'boolean',
+            ),
+            'lot_is-underground-parking' => array(
+                'label' => 'Подземная парковка',
+                'type' => 'boolean',
+            ),
+            'lot_is-VAT' => array(
+                'label' => 'Цена с НДС',
+                'type' => 'boolean',
+            ),
+            'lot_is-conditioner' => array(
+                'label' => 'Кондиционер',
+                'type' => 'boolean',
+            ),
+            'lot_is-cold-warehouse' => array(
+                'label' => 'Холодный склад',
+                'type' => 'boolean',
+            ),
+            'lot_is-forced-ventilation' => array(
+                'label' => 'Приточная вентиляция',
+                'type' => 'boolean',
+            ),
+            'lot_is-exhaust-ventilation' => array(
+                'label' => 'Вытяжная вентиляция',
+                'type' => 'boolean',
+            ),
+            'lot_is-municipal-parking' => array(
+                'label' =>'Муниципальная парковка',
+                'type' => 'boolean',
+            ),
+            'lot_is-paid-parking' => array(
+                'label' => 'Платная парковка',
+                'type' => 'boolean',
+            ),
+            'lot_is-free-parking' => array(
+                'label' => 'Бесплатная парковка',
+                'type' => 'boolean',
+            ),
+            'lot_is-ramp' => array(
+                'label' => 'Пандус',
+                'type' => 'boolean',
+            ),
+            'lot_is-access-24' => array(
+                'label' => 'Доступ 24 часа',
+                'type' => 'boolean',
+            ),
+            'lot_is-emergency-input' => array(
+                'label' => 'Запасной вход',
+                'type' => 'boolean',
+            ),
+        );
+
+        return $fields;
+    }
+
+    add_action( 'wp_head', function () {
+        $city = get_current_city_user_by_ip();
+        $_sites = get_sites();
+        $current_blog_id = get_current_blog_id();
+
+        if ( !empty( $_sites ) ) {
+            foreach ( $_sites as $_site ) {
+                switch_to_blog( $_site->blog_id );
+                if ( !empty( get_field('current_name_city', 'options') ) ) {
+                    if ( ( get_field('current_name_city', 'options') == $city ) && ( $_site->blog_id != $current_blog_id ) ) {
+                        // wp_redirect('https://' . $_site->domain, 301);
+                    }
+                }
+                restore_current_blog();
+            }
+        }
+    });
+
+    function get_class_modal_change_city () {
+        $site_city = get_field('current_name_city', 'options');
+        $city = get_current_city_user_by_ip();
+
+        if ( $site_city != $city && get_change_city() == 'true' ) {
+            return ' active';
+        }
+    }
+
+
+    function get_current_city_user_by_ip () {
+        $is_bot = preg_match(
+            "~(Google|Yahoo|Rambler|Bot|Yandex|Spider|Snoopy|Crawler|Finder|Mail|curl)~i",
+            $_SERVER['HTTP_USER_AGENT']
+        );
+        $geo = !$is_bot ? json_decode(file_get_contents('http://api.sypexgeo.net/json/' . $_SERVER['REMOTE_ADDR']), true) : [];
+        $city = ( !empty( $geo['city']['name_ru'] ) ) ? $geo['city']['name_ru'] : 'Казань';
+        return $city;
+    }
+
+
+
+    function get_change_city(){
+        if (!session_id()) {
+            session_set_cookie_params(MONTH_IN_SECONDS);
+            session_start();
+        }
+        $change_city = 'true';
+        if ( !empty( $_SESSION['change_city'] ) ) $change_city = base64_decode($_SESSION['change_city']);
+
+        return $change_city;
+    }
+
+    function set_change_city($change_city){
+        get_change_city();
+        if (!is_string($change_city) && strlen( $change_city ) > 0) $change_city = 'true';
+        $_SESSION['change_city'] = base64_encode($change_city);
+    }
+
+    add_filter( 'rank_math/frontend/title', function( $title ) {
+        if ( is_singular( 'lot' ) && is_single( get_the_ID() ) ) {
+            $title = array();
+
+            $terms = get_the_terms(get_the_ID(), 'pa_tip-sdelki');
+            $terms_names = array();
+            if ( !empty( $terms ) ) {
+                foreach ( $terms as $term ) {
+                    $terms_names[] = $term->name;
+                }
+            }
+            if ( in_array( 'Аренда', $terms_names ) ) {
+                $title['deal_type'] = 'арендовать';
+            } elseif ( in_array('Продажа', $terms_names) ) {
+                $title['deal_type'] = 'купить';
+            }
+
+            $category = get_term_by( 'name', 'Жилая недвижимость', 'catalog' );
+            $type_object_taxonomy = ( !has_term( array( $category->term_id ), 'catalog', get_the_ID() ) ) ? 'pa_tip-obekta' : 'pa_kategoriya-lota';
+
+            $type_object = array();
+            $terms = get_the_terms(get_the_ID(), $type_object_taxonomy);
+            if ( !empty( $terms ) ) {
+                foreach ( $terms as $term ) {
+                    $type_object[] = $term->name;
+                }
+            }
+            $type_object = implode( ' ', $type_object );
+            $title['type_object'] = mb_strtolower($type_object);
+
+            $cities = get_the_terms(get_the_ID(), 'pa_gorod');
+            if ( !empty( $cities ) ) {
+                foreach ( $cities as $city ) {
+                    $title['city'][] = $city->name;
+                }
+
+                $title['city'] = 'в городе ' . implode( ' ', $title['city'] );
+            }
+
+            $district = get_field( 'lot_district', get_the_ID() );
+            if ( !empty($district) ) $title['district'] = mb_strtolower('в районе ' . $district);
+
+            $street = get_field( 'lot_address', get_the_ID() );
+            if ( !empty( $street ) ) $title['street'] = 'по ул. ' . str_replace( 'улица', '', $street );
+
+
+            if ( is_array( $title ) ) $title = implode(' ', $title);
+            $title .= ' - ' . get_bloginfo('name');
+            $title = mb_ucfirst($title);
+            return $title;
+        }
+
+        if ( is_archive('lot') || taxonomy_exists( 'catalog' ) ) {
+            preg_match_all('/(pa_(([^\/]*)))/', $_SERVER['REQUEST_URI'], $matches);
+            $vars = reset($matches);
+            if ( !empty($vars[0]) ) {
+                $vars = $vars[0];
+                $title = array();
+                $filters = get_all_filters();
+                $vars = explode( '-or-', $vars );
+                $request = array();
+                if ( !empty( $filters ) ) {
+                    foreach ( $vars as $var ) {
+                        foreach ( $filters as $filter_name => $filter_data ) {
+                            if ( $filter_data['type'] == 'range' ) {
+                                if ( preg_match("(^(" . $filter_name . ")-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $re = '/(([0-9]*)?[^-variety-]([0-9]*))/';
+                                    preg_match_all($re, $var, $matches);
+
+                                    $request[$filter_name] = $matches[0];
+                                }
+                            } else if ( $filter_data['type'] == 'multi-select' ) {
+                                if ( preg_match("(^" . $filter_name . "-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $request[$filter_name] = explode('-and-', $var);
+                                }
+                            } else if ( $filter_data['type'] == 'input-text' ) {
+                                if ( preg_match("(^" . $filter_name . "-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $request[$filter_name] = urldecode($var);
+                                }
+                            } else if ( $filter_data['type'] == 'select' ) {
+                                if ( preg_match("(^" . $filter_name . "-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $request[$filter_name] = urldecode($var);
+                                }
+                            } else if ( $filter_data['type'] == 'checkbox' ) {
+                                if ( preg_match("(^" . $filter_name . "-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $request[$filter_name] = ( $var === 'on' );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                $use_taxonomies = array(
+                    'pa_tip-sdelki',
+                    'pa_tip-obekta',
+                    'pa_street',
+                    'pa_area',
+                    'pa_price',
+                );
+
+                foreach ( $use_taxonomies as $use_taxonomy ) {
+                    if ( !empty( $request[$use_taxonomy] ) ) {
+                        if ( taxonomy_exists( $use_taxonomy ) ) {
+                            if ( is_string( $request[$use_taxonomy] ) ) {
+                                $term = get_term_by( 'slug', $request[$use_taxonomy], $use_taxonomy );
+                                $request[$use_taxonomy] = $term->name;
+                            } else if ( is_array( $request[$use_taxonomy] ) ) {
+                                if ( !empty( $request[$use_taxonomy] ) ) {
+                                    $tax_names = array();
+                                    foreach ( $request[$use_taxonomy] as $term_slug ) {
+                                        $term = get_term_by( 'slug', $term_slug, $use_taxonomy );
+                                        $tax_names[] = $term->name;
+                                    }
+                                    $request[$use_taxonomy] = $tax_names;
+                                }
+                            }
+                        } else {
+                            if ( $use_taxonomy == 'pa_area' ) {
+                                $request[$use_taxonomy] = 'площадью от ' . $request[$use_taxonomy][0] . ' до ' . $request[$use_taxonomy][1] . ' кв.м';
+                            } else if ( $use_taxonomy == 'pa_price' ) {
+                                $request[$use_taxonomy] = 'стоимостью от ' . $request[$use_taxonomy][0] . ' до ' . $request[$use_taxonomy][1] . ' руб.';
+                            }
+                        }
+                    }
+                }
+
+                if ( !empty( $request['pa_tip-sdelki'] ) ) {
+                    if ( 'Аренда' == $request['pa_tip-sdelki'] ) {
+                        $title['deal_type'] = 'аренда';
+                    } elseif ( 'Продажа' == $request['pa_tip-sdelki'] ) {
+                        $title['deal_type'] = 'купить';
+                    }
+                }
+
+                if ( !empty( $request['pa_tip-obekta'] ) ) {
+                    $title['type_object'] = mb_strtolower(implode(', ', $request['pa_tip-obekta']));
+                }
+
+                $city = get_field('current_name_city', 'options');
+                if ( !empty( $city ) ) {
+                    $title['city'] = 'в городе ' . $city;
+                }
+
+                if ( !empty( $request['pa_street'] ) ) {
+                    $title['street'] = 'по ул. ' . str_replace( 'улица', '', $request['pa_street'] );
+                }
+
+                if ( !empty( $request['pa_area'] ) ) {
+                    $title['area'] = $request['pa_area'];
+                }
+
+                if ( !empty( $request['pa_price'] ) ) {
+                    $title['price'] = $request['pa_price'];
+                }
+
+                $title = implode(' ', $title);
+
+                $title .= ' - ' . get_bloginfo('name');
+                $title = mb_ucfirst($title);
+                return $title;
+            }
+        }
+
+        if ( is_singular( 'filter' ) && is_single( get_the_ID() ) ) {
+            if ( !get_field( 'manual_meta', get_the_ID() ) ) {
+                $title = array();
+
+                $title['name_filter'] = get_the_title();
+                $title['spaser'] = ':';
+                $title['add_info_1'] = 'подбор объектов недвижимости';
+
+                if ( is_array( $title ) ) $title = implode(' ', $title);
+                $title .= ' - ' . get_bloginfo('name');
+                $title = mb_ucfirst($title);
+                return $title;
+            }
+        }
+
+        return $title;
+    });
+
+
+
+    add_filter( 'rank_math/frontend/description', function( $description ) {
+        if ( is_singular( 'lot' ) && is_single( get_the_ID() ) ) {
+            $description = array();
+
+            $terms = get_the_terms(get_the_ID(), 'pa_tip-sdelki');
+            $terms_names = array();
+            if ( !empty( $terms ) ) {
+                foreach ( $terms as $term ) {
+                    $terms_names[] = $term->name;
+                }
+            }
+            if ( in_array( 'Аренда', $terms_names ) ) {
+                $description['deal_type'] = 'сдаётся в аренду';
+            } elseif ( in_array('Продажа', $terms_names) ) {
+                $description['deal_type'] = 'продаётся';
+            }
+
+            $category = get_term_by( 'name', 'Жилая недвижимость', 'catalog' );
+            $type_object_taxonomy = ( !has_term( array( $category->term_id ), 'catalog', get_the_ID() ) ) ? 'pa_tip-obekta' : 'pa_kategoriya-lota';
+
+            $type_object = array();
+            $terms = get_the_terms(get_the_ID(), $type_object_taxonomy);
+            if ( !empty( $terms ) ) {
+                foreach ( $terms as $term ) {
+                    $type_object[] = $term->name;
+                }
+            }
+            $type_object = implode( ' ', $type_object );
+            $description['type_object'] = mb_strtolower($type_object);
+
+            $cities = get_the_terms(get_the_ID(), 'pa_gorod');
+            if ( !empty( $cities ) ) {
+                foreach ( $cities as $city ) {
+                    $description['city'][] = $city->name;
+                }
+
+                $description['city'] = 'в городе ' . implode( ' ', $description['city'] );
+            }
+
+            $district = get_field( 'lot_district', get_the_ID() );
+            if ( !empty($district) ) $description['district'] = mb_strtolower('в районе ' . $district);
+
+            $street = get_field( 'lot_address', get_the_ID() );
+            if ( !empty( $street ) ) $description['street'] = 'по ул. ' . str_replace( 'улица', '', $street );
+
+            $area_value = get_field('area_value', get_the_ID());
+            $area_unit = get_field('area_unit', get_the_ID());
+            if ( !empty( $area_value ) && !empty( $area_unit ) ) {
+                if ( !empty( $area_value ) ) $description['area_value'] = $area_value;
+                if ( !empty( $area_unit ) ) $description['area_unit'] = $area_unit;
+            }
+
+
+
+            if ( is_array( $description ) ) $description = implode(' ', $description);
+            $description .= ' Оставьте заявку на сайте и наши специалисты вам перезвонят. Мы всегда рады помочь!';
+            $description = mb_ucfirst($description);
+            return $description;
+        }
+
+
+        if ( is_archive('lot') || taxonomy_exists( 'catalog' ) ) {
+            preg_match_all('/(pa_(([^\/]*)))/', $_SERVER['REQUEST_URI'], $matches);
+            $vars = reset($matches);
+            if ( !empty( $vars[0] ) ) {
+                $vars = $vars[0];
+                $description = array();
+                $filters = get_all_filters();
+                $vars = explode( '-or-', $vars );
+                $request = array();
+                if ( !empty( $filters ) ) {
+                    foreach ( $vars as $var ) {
+                        foreach ( $filters as $filter_name => $filter_data ) {
+                            if ( $filter_data['type'] == 'range' ) {
+                                if ( preg_match("(^(" . $filter_name . ")-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $re = '/(([0-9]*)?[^-variety-]([0-9]*))/';
+                                    preg_match_all($re, $var, $matches);
+
+                                    $request[$filter_name] = $matches[0];
+                                }
+                            } else if ( $filter_data['type'] == 'multi-select' ) {
+                                if ( preg_match("(^" . $filter_name . "-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $request[$filter_name] = explode('-and-', $var);
+                                }
+                            } else if ( $filter_data['type'] == 'input-text' ) {
+                                if ( preg_match("(^" . $filter_name . "-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $request[$filter_name] = urldecode($var);
+                                }
+                            } else if ( $filter_data['type'] == 'select' ) {
+                                if ( preg_match("(^" . $filter_name . "-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $request[$filter_name] = urldecode($var);
+                                }
+                            } else if ( $filter_data['type'] == 'checkbox' ) {
+                                if ( preg_match("(^" . $filter_name . "-)", $var) ) {
+                                    $var = preg_replace("(^" . $filter_name . "-)", "", $var);
+                                    $request[$filter_name] = ( $var === 'on' );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                $use_taxonomies = array(
+                    'pa_tip-sdelki',
+                    'pa_tip-obekta',
+                    'pa_street',
+                    'pa_area',
+                    'pa_price',
+                );
+
+                foreach ( $use_taxonomies as $use_taxonomy ) {
+                    if ( !empty( $request[$use_taxonomy] ) ) {
+                        if ( taxonomy_exists( $use_taxonomy ) ) {
+                            if ( is_string( $request[$use_taxonomy] ) ) {
+                                $term = get_term_by( 'slug', $request[$use_taxonomy], $use_taxonomy );
+                                $request[$use_taxonomy] = $term->name;
+                            } else if ( is_array( $request[$use_taxonomy] ) ) {
+                                if ( !empty( $request[$use_taxonomy] ) ) {
+                                    $tax_names = array();
+                                    foreach ( $request[$use_taxonomy] as $term_slug ) {
+                                        $term = get_term_by( 'slug', $term_slug, $use_taxonomy );
+                                        $tax_names[] = $term->name;
+                                    }
+                                    $request[$use_taxonomy] = $tax_names;
+                                }
+                            }
+                        } else {
+                            if ( $use_taxonomy == 'pa_area' ) {
+                                $request[$use_taxonomy] = 'площадью от ' . $request[$use_taxonomy][0] . ' до ' . $request[$use_taxonomy][1] . ' кв.м';
+                            } else if ( $use_taxonomy == 'pa_price' ) {
+                                $request[$use_taxonomy] = 'стоимостью от ' . $request[$use_taxonomy][0] . ' до ' . $request[$use_taxonomy][1] . ' руб.';
+                            }
+                        }
+                    }
+                }
+
+                if ( !empty( $request['pa_tip-sdelki'] ) ) {
+                    if ( 'Аренда' == $request['pa_tip-sdelki'] ) {
+                        $description['deal_type'] = 'снять в аренду';
+                    } elseif ( 'Продажа' == $request['pa_tip-sdelki'] ) {
+                        $description['deal_type'] = 'купить';
+                    }
+                }
+
+                if ( !empty( $request['pa_tip-obekta'] ) ) {
+                    $description['type_object'] = mb_strtolower(implode(', ', $request['pa_tip-obekta']));
+                }
+
+                $city = get_field('current_name_city', 'options');
+                if ( !empty( $city ) ) {
+                    $description['city'] = 'в городе ' . $city;
+                }
+
+                if ( !empty( $request['pa_area'] ) ) {
+                    $description['area'] = $request['pa_area'];
+                }
+
+                $description['add_info_0'] = 'можно через наше агентство недвижимости DiGroup.  Подбор любых объектов недвижимости';
+
+                if ( !empty( $request['pa_rajon'] ) ) {
+                    $description['district'] = ( is_array($request['pa_rajon']) ) ? 'в районах ' . implode(', ', $request['pa_rajon']) : 'в районе ' . $request['pa_rajon'];
+                }
+
+                if ( !empty( $request['pa_street'] ) ) {
+                    $description['street'] = 'по ул. ' . str_replace( 'улица', '', $request['pa_street'] );
+                }
+
+                $description['add_info_1'] = 'по приемлемым ценам.';
+
+                $description = implode(' ', $description);
+                $description = mb_ucfirst($description);
+                return $description;
+            }
+        }
+
+        if ( is_singular( 'filter' ) && is_single( get_the_ID() ) ) {
+            if ( !get_field( 'manual_meta', get_the_ID() ) ) {
+                $description = array();
+
+                $description['add_info_1'] = 'Купля-продажа, аренда';
+                $description['name_filter'] = mb_strtolower( get_the_title(get_the_ID()) );
+                $description['add_info_2'] = 'в агентстве недвижимости Di Group. Воспользуйтесь подборником на сайте для поиска объектов недвижимости. Бесплатно проконсультируем, звоните!';
+
+                if ( is_array( $description ) ) $description = implode(' ', $description);
+                $description = mb_ucfirst($description);
+                return $description;
+            }
+        }
+
+        return $description;
+    });
